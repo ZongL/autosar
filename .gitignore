@@ -7,3 +7,7 @@ usage_tests/
 **/data/validate_all.sh
 **/generated/*.xsd
 **/generated/validate_all.sh
+
+
+z_swc_gen/data/
+z_swc_gen/generated/
