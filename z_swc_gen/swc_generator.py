@@ -213,18 +213,23 @@ def create_clientserver_port(swc: ar_element.ApplicationSoftwareComponentType, p
             if op.name == operation_name:
                 operation = op
                 break
- 
+    
     if operation is None:
         raise ValueError(f"Operation '{operation_name}' not found in interface '{interface.name}'")
     
-    # 创建com_spec
+    # 获取operation引用
+    operation_ref = operation.ref()
+    if operation_ref is None:
+        raise ValueError(f"Operation '{operation_name}' reference is None. Make sure the interface is added to workspace first.")
+    
+    # 创建com_spec（注意：需要放在列表中传递）
     if direction.lower() == 'provide':
         # 提供端口使用ServerComSpec
-        com_spec = ar_element.ServerComSpec(operation_ref=operation.ref())
+        com_spec = [ar_element.ServerComSpec(operation_ref=operation_ref)]
         return swc.create_provide_port(port_name, interface_ref, com_spec=com_spec)
     elif direction.lower() == 'require':
         # 需求端口使用ClientComSpec
-        com_spec = ar_element.ClientComSpec(operation_ref=operation.ref())
+        com_spec = [ar_element.ClientComSpec(operation_ref=operation_ref)]
         return swc.create_require_port(port_name, interface_ref, com_spec=com_spec)
     else:
         raise ValueError(f"Unknown direction: {direction}")
