@@ -115,7 +115,7 @@ def create_data_type(workspace: ar_workspace.Workspace, data_type_name: str):
     return workspace.find_element("PlatformImplementationDataTypes", impl_type_name)
 
 
-def create_interface(workspace: ar_workspace.Workspace, interface_name: str, element_name: str, data_type: str):
+def create_senderreceiver_interface(workspace: ar_workspace.Workspace, interface_name: str, element_name: str, data_type: str):
     """
     创建发送接收接口
     """
@@ -137,11 +137,53 @@ def create_interface(workspace: ar_workspace.Workspace, interface_name: str, ele
     
     return port_interface
 
+def create_clientserver_interface(workspace: ar_workspace.Workspace, interface_name: str, operation_name: str, data_type: str):
+    """
+    创建ClientServer接口
+    如果接口已存在，则向其添加新的operation
+    """
+    import autosar.xml.enumeration as ar_enum
+    
+    # 检查接口是否已存在
+    existing_interface = workspace.find_element("PortInterfaces", interface_name)
+    
+    if existing_interface is not None:
+        # 接口已存在，添加新的operation
+        portinterface = existing_interface
+    else:
+        # 创建新的ClientServer接口
+        portinterface = ar_element.ClientServerInterface(interface_name, is_service=False)
+    
+    # 获取数据类型
+    impl_type = create_data_type(workspace, data_type)
+    if impl_type is None:
+        print(f"Warning: Data type {data_type} not found, using uint8 as default")
+        impl_type = workspace.find_element("PlatformImplementationDataTypes", "uint8")
+    
+    # 创建operation
+    operation = portinterface.create_operation(operation_name)
+    
+    # 创建out参数
+    operation.create_out_argument("outvalue",
+                                 ar_enum.ServerArgImplPolicy.USE_ARGUMENT_TYPE,
+                                 type_ref=impl_type.ref())
+    
+    # 创建in参数
+    operation.create_in_argument("invalue",
+                                ar_enum.ServerArgImplPolicy.USE_ARGUMENT_TYPE,
+                                type_ref=impl_type.ref())
+    
+    # 如果是新创建的接口，添加到工作空间
+    if existing_interface is None:
+        workspace.add_element("PortInterfaces", portinterface)
+    
+    return portinterface
+
 
 def create_port(swc: ar_element.ApplicationSoftwareComponentType, port_name: str, interface_ref, 
                 direction: str, init_value_ref=None):
     """
-    创建端口（提供端口或需求端口）
+    创建SenderReceiver类型的端口（提供端口或需求端口）
     """
     com_spec = {}
     if init_value_ref:
@@ -151,6 +193,38 @@ def create_port(swc: ar_element.ApplicationSoftwareComponentType, port_name: str
     if direction.lower() == 'provide':
         return swc.create_provide_port(port_name, interface_ref, com_spec=com_spec)
     elif direction.lower() == 'require':
+        return swc.create_require_port(port_name, interface_ref, com_spec=com_spec)
+    else:
+        raise ValueError(f"Unknown direction: {direction}")
+
+
+def create_clientserver_port(swc: ar_element.ApplicationSoftwareComponentType, port_name: str, 
+                             interface_ref, direction: str, operation_name: str):
+    """
+    创建ClientServer类型的端口（提供端口或需求端口）
+    需要指定operation引用
+    """
+    # 从接口中查找operation
+    interface = interface_ref
+    operation = None
+    
+    if hasattr(interface, 'operations') and interface.operations:
+        for op in interface.operations:
+            if op.name == operation_name:
+                operation = op
+                break
+ 
+    if operation is None:
+        raise ValueError(f"Operation '{operation_name}' not found in interface '{interface.name}'")
+    
+    # 创建com_spec
+    if direction.lower() == 'provide':
+        # 提供端口使用ServerComSpec
+        com_spec = ar_element.ServerComSpec(operation_ref=operation.ref())
+        return swc.create_provide_port(port_name, interface_ref, com_spec=com_spec)
+    elif direction.lower() == 'require':
+        # 需求端口使用ClientComSpec
+        com_spec = ar_element.ClientComSpec(operation_ref=operation.ref())
         return swc.create_require_port(port_name, interface_ref, com_spec=com_spec)
     else:
         raise ValueError(f"Unknown direction: {direction}")
@@ -265,7 +339,8 @@ def main():
             'interface_name': interface_name,
             'direction': direction,
             'element_name': element_name,
-            'data_type': element_data_type
+            'data_type': element_data_type,
+            'interface_type': interface_type
         })
     
     print(f"Found SWC: {swc_name}")
@@ -274,12 +349,21 @@ def main():
     # 创建常量
     create_constants(workspace, interface_data)
     
-    # 创建接口
+    # 创建接口（根据类型创建SenderReceiver或ClientServer接口）
     created_interfaces = {}
     for interface_name, info in interface_data.items():
-        interface = create_interface(workspace, interface_name, info['element_name'], info['data_type'])
-        created_interfaces[interface_name] = interface
-        print(f"Created interface: {interface_name}")
+        interface_type = info['interface_type'].strip().lower()
+        
+        if interface_type == 'clientserver':
+            # 创建ClientServer接口
+            interface = create_clientserver_interface(workspace, interface_name, info['element_name'], info['data_type'])
+            created_interfaces[interface_name] = interface
+            print(f"Created ClientServer interface: {interface_name} with operation: {info['element_name']}")
+        else:
+            # 创建SenderReceiver接口
+            interface = create_senderreceiver_interface(workspace, interface_name, info['element_name'], info['data_type'])
+            created_interfaces[interface_name] = interface
+            print(f"Created SenderReceiver interface: {interface_name}")
     
     # 创建应用软件组件
     if swc_name:
@@ -290,10 +374,18 @@ def main():
         port_names = []
         for port in port_info:
             interface = created_interfaces[port['interface_name']]
-            init_value = workspace.find_element("Constants", f"{port['element_name']}_IV")
+            interface_type = port['interface_type']
+            element_name = port['element_name']
             
-            create_port(swc, port['port_name'], interface, port['direction'], 
-                       init_value.ref() if init_value else None)
+            if interface_type.strip().lower() == 'clientserver':
+                # ClientServer接口使用专门的函数创建端口
+                create_clientserver_port(swc, port['port_name'], interface, port['direction'], element_name)
+            else:
+                # SenderReceiver接口需要初始值
+                init_value = workspace.find_element("Constants", f"{element_name}_IV")
+                create_port(swc, port['port_name'], interface, port['direction'], 
+                           init_value.ref() if init_value else None)
+            
             port_names.append(port['port_name'])
             print(f"Created {port['direction']} port: {port['port_name']}")
         
