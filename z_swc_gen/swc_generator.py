@@ -375,8 +375,10 @@ def main():
         swc = ar_element.ApplicationSoftwareComponentType(swc_name)
         workspace.add_element("ComponentTypes", swc)
         
-        # 创建端口
-        port_names = []
+        # 创建端口，并分类收集端口信息
+        sr_port_names = []  # SenderReceiver端口
+        cs_port_operations = []  # ClientServer端口的operation信息
+        
         for port in port_info:
             interface = created_interfaces[port['interface_name']]
             interface_type = port['interface_type']
@@ -385,14 +387,20 @@ def main():
             if interface_type.strip().lower() == 'clientserver':
                 # ClientServer接口使用专门的函数创建端口
                 create_clientserver_port(swc, port['port_name'], interface, port['direction'], element_name)
+                # 只为provide端口创建runnable和event
+                if port['direction'].lower() == 'provide':
+                    cs_port_operations.append({
+                        'port_name': port['port_name'],
+                        'operation_name': element_name
+                    })
+                print(f"Created {port['direction']} CS port: {port['port_name']}")
             else:
                 # SenderReceiver接口需要初始值
                 init_value = workspace.find_element("Constants", f"{element_name}_IV")
                 create_port(swc, port['port_name'], interface, port['direction'], 
                            init_value.ref() if init_value else None)
-            
-            port_names.append(port['port_name'])
-            print(f"Created {port['direction']} port: {port['port_name']}")
+                sr_port_names.append(port['port_name'])
+                print(f"Created {port['direction']} SR port: {port['port_name']}")
         
         # 创建内部行为
         behavior = swc.create_internal_behavior()
@@ -401,18 +409,39 @@ def main():
         behavior.create_exclusive_area("ExampleExclusiveArea")
         
         # 创建可运行实体
+        # 1. Init runnable
         init_runnable_name = f"{swc_name}_Init"
-        periodic_runnable_name = f"{swc_name}_Run"
-        
         create_runnable(behavior, init_runnable_name, [])
-        create_runnable(behavior, periodic_runnable_name, port_names)
+        
+        # 2. Periodic runnable (用于SenderReceiver端口)
+        if sr_port_names:
+            periodic_runnable_name = f"{swc_name}_Run"
+            create_runnable(behavior, periodic_runnable_name, sr_port_names)
+        
+        # 3. ClientServer operation runnables (每个operation一个runnable)
+        for cs_op in cs_port_operations:
+            cs_runnable_name = f"{swc_name}_{cs_op['port_name']}_{cs_op['operation_name']}"
+            create_runnable(behavior, cs_runnable_name, [])
+            print(f"Created CS runnable: {cs_runnable_name}")
         
         # 创建事件
+        # 1. Init event
         behavior.create_init_event(init_runnable_name)
-        behavior.create_timing_event(periodic_runnable_name, period=0.1)
+        
+        # 2. Timing event (用于SenderReceiver端口)
+        if sr_port_names:
+            behavior.create_timing_event(periodic_runnable_name, period=0.1)
+        
+        # 3. Operation invoked events (用于ClientServer端口)
+        for cs_op in cs_port_operations:
+            cs_runnable_name = f"{swc_name}_{cs_op['port_name']}_{cs_op['operation_name']}"
+            operation_ref = f"{cs_op['port_name']}/{cs_op['operation_name']}"
+            behavior.create_operation_invoked_event(cs_runnable_name, operation_ref)
+            print(f"Created operation invoked event for: {operation_ref}")
         
         # 创建访问点
-        create_access_points(behavior, port_names)
+        all_port_names = sr_port_names + [cs_op['port_name'] for cs_op in cs_port_operations]
+        create_access_points(behavior, all_port_names)
         
         # 创建SWC实现对象
         impl = ar_element.SwcImplementation(f"{swc_name}_Implementation", 
