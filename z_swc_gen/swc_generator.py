@@ -295,13 +295,10 @@ def read_excel_data(excel_file: str):
         return None
 
 
-def main():
+def convert_xlsx_to_arxml(excel_file, output_file):
     """
     主函数
-    """
-    excel_file = "myswcautosar.xlsx"
-    output_file = "myswc_gen.arxml"
-    
+    """    
     # 读取Excel数据
     df = read_excel_data(excel_file)
     if df is None:
@@ -466,4 +463,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    local_excel_file = "myswcautosar.xlsx"
+    local_output_file = "myswc_gen.arxml"
+    convert_xlsx_to_arxml(local_excel_file, local_output_file)
